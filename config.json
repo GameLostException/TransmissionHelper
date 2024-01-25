@@ -4,5 +4,11 @@
   "credentials": {
     "username": "admin",
     "password": "admin"
+  },
+  "mount_point": "/",
+  "logging": {
+    "log_level": "INFO",
+    "file_name": "transmission_helper.log",
+    "file_path": "/var/log"
   }
 }

@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 import shutil
 import sys
 import textwrap
@@ -33,18 +34,16 @@ class TransmissionHelper:
     # The minimum disk space to keep free. Nothing should be deleted if there is enough free space
     # 100*1024*1024*1024 is 100 GiB
     MIN_FREE_SPACE = 100 * 1024 * 1024 * 1024
-    # Mount point to monitor space for
+    # Mount point to monitor space for, defaulted to the volume containing this script
     MOUNT_PT = __file__
-    # MOUNT_PT = "/srv/dev-disk-by-uuid-e49a2a19-0dc1-4774-b3f6-27ba1770ded1"
-    # Logging location
-    LOG_FILE_PATH = '/tmp/transmissionHelper.log'
-    # LOG_FILE_PATH = '/var/log/transmissionHelper.log'
+    # Logging location defaulted to the directory containing this script
+    LOG_FILE_PATH = '.'
 
-    parser = argparse.ArgumentParser(
-        prog='TransmissionHelper',
-        description='Suite of CLI utilities for Transmission',
-        epilog='gamelostexcpetion@gmail.com',
-        formatter_class=argparse.RawTextHelpFormatter)
+    # Args parser config with detailed help
+    parser = argparse.ArgumentParser(prog='TransmissionHelper',
+                                     description='Suite of CLI utilities for Transmission',
+                                     epilog='gamelostexcpetion@gmail.com',
+                                     formatter_class=argparse.RawTextHelpFormatter)
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-c', '--clean_mode',
                        choices=['seed_ratio', 'free_space'],
@@ -64,41 +63,64 @@ class TransmissionHelper:
                        const='id',
                        help=textwrap.dedent('''\
                             blah'''))
+    group.required = True
+    parser.add_argument('-x', '--execute',
+                        action='store_true',
+                        help=textwrap.dedent('''\
+                            By default no impacting action is taken toward Transmission, this flag
+                            is needed to overrides this behaviour'''))
+    parser.add_argument('-f', '--config_file',
+                        help=textwrap.dedent('''\
+                                Full path of the config file to use, defaults to ./config.json'''))
+    parser.add_argument('-r', '--min_ratio',
+                        type=float,
+                        help=textwrap.dedent('''\
+                                    Minimum seeding ratio used as a filter for the listing and cleaning options'''))
+    parser.add_argument('-s', '--min_free_space',
+                        type=int,
+                        help=textwrap.dedent('''\
+                                        Minimum desired free space in Bytes, 
+                                        applies to the listing and cleaning options'''))
     parser.add_argument('-v', '--verbose',
                         action='store_true',
                         help=textwrap.dedent('''\
                                 Enable debug-level logging, both on stdout and logging file.'''))
-    parser.add_argument('-x', '--execute', action='store_true',
-                        help=textwrap.dedent('''\
-                            By default no impacting action is taken toward Transmission, this flag
-                            is needed to overrides this behaviour'''))
 
     def __init__(self):
-        # Logging
+        # Default logging
         self.logger = logging.getLogger(__name__)
-        file_handler = logging.FileHandler(self.LOG_FILE_PATH)
-        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
         std_handler = logging.StreamHandler(stream=sys.stdout)
         std_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
-        self.logger.addHandler(file_handler)
         self.logger.addHandler(std_handler)
         self.logger.setLevel(logging.INFO)
+        self.log_file_path = self.LOG_FILE_PATH
+
         # Torrent lists
         self.torrent_list = []
         self.torrent_list_min_ratio = []
         self.torrent_list_min_ratio_size = 0
         self.torrent_list_min_free_space = []
         self.torrent_list_min_free_space_size = 0
-        # Transmission client's credentials
-        with open('config.json', 'r') as config_file:
-            config = json.load(config_file)
+
+        # Class
+        self.client = None
+
+        # Configuration
+        self.config_file = 'config.json'
+        self.config = None
+
+    def __connect(self):
         try:
-            self.client = Client(host=config.get('host'),
-                                 port=config.get('port'),
-                                 username=config.get('credentials').get('username'),
-                                 password=config.get('credentials').get('password'))
+            self.client = Client(host=self.config['host'],
+                                 port=self.config['port'],
+                                 username=self.config['credentials']['username'],
+                                 password=self.config['credentials']['password'])
         except:
-            self.logger.error('Could not connect to Transmission server')
+            self.logger.error('Could not connect to Transmission server with host=%s, port=%s, login=%s, pwd=%s',
+                              self.config['host'],
+                              self.config['port'],
+                              self.config['credentials']['username'],
+                              self.config['credentials']['password'])
             exit(-1)
 
     # Helper function to display bytes sizes in a human friendly way
@@ -129,24 +151,23 @@ class TransmissionHelper:
     def cleanup(self, clean_mode, execute):
         if not execute:
             self.logger.info("Running in preview mode, no change request is actually sent to Transmission.")
-        # Check whether we have enough free space
         if self.__is_enough_free_space():
             self.logger.info("There is more than %s of free space already, no need to clean-up torrents.",
                              self.__human_readable_size(self.MIN_FREE_SPACE))
             exit(0)
         # Get the torrents data now
+        self.__connect()
         self.__get_torrents_data()
         # Check we have material to clean
         if self.torrent_list_min_ratio_size == 0.0:
-            self.logger.info(
-                "There is no eligible torrent to clean-up, consider changing the sorting and filters criteria "
-                "of the Transmission torrent list.")
+            self.logger.info('There is no eligible torrent to clean-up, consider changing the sorting and '
+                             'filters criteria of the Transmission torrent list.')
             exit(1)
         # Clean according to the passed CleanMode
         match clean_mode:
             case CleanMode.MIN_FREE_SPACE:
                 # Compute the space we need to free to obtain MIN_FREE_SPACE
-                space_to_free = self.MIN_FREE_SPACE - shutil.disk_usage(self.MOUNT_PT)[2]
+                space_to_free = self.MIN_FREE_SPACE - self.__get_disk_free_space()
                 total_torrents_to_clean = 0
                 for t in self.torrent_list_min_ratio:
                     if total_torrents_to_clean < space_to_free:
@@ -214,42 +235,79 @@ class TransmissionHelper:
 
     # TODO WIP, need a proper display of the table and setting the sorting options right
     def list_torrents(self):
+        self.__connect()
         self.__get_torrents_data()
         matrix = self.__get_torrent_list_as_matrix(self.torrent_list)
+        # TODO link the sorting types to the ad-hoc cols
+        # TODO make sorting by size work (do we add a hidden byte col?)
+        matrix.sort(key=lambda item: item[0])
         for row in matrix:
-            self.logger.info('| {:6d} | {:50.50s} | {:%Y-%m-%d %H:%M:%S} | {:.2f} | {:.2f} | {:6s} |'.format(*row))
+            print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:.0f} | {:.1f} | {:s} |'.format(*row))
 
     @staticmethod
     def __get_torrent_list_as_matrix(torrent_list):
         torrent_matrix = []
         for torrent in torrent_list:
-            torrent_matrix.append([torrent.id, torrent.name, torrent.added_date, torrent.progress, torrent.ratio,
+            torrent_matrix.append([torrent.id,
+                                   torrent.name,
+                                   torrent.added_date,
+                                   TransmissionHelper.__human_readable_size(torrent.total_size),
+                                   torrent.progress,
+                                   torrent.ratio,
                                    torrent.status])
         return torrent_matrix
 
+    def configure(self):
+        # Load configuration
+        with open(self.config_file, 'r') as conf:
+            try:
+                self.config = json.load(conf)
+            except Exception as e:
+                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, e)
+                exit(2)
+
+        # Setup the file logger
+        logfile_conf_success = False
+        if os.access(self.config['logging']['file_path'], os.W_OK | os.X_OK):
+            self.log_file_path = self.config['logging']['file_path']
+            logfile_conf_success = True
+        file_handler = logging.FileHandler(self.log_file_path + '/' + self.config['logging']['file_name'])
+        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+        self.logger.addHandler(file_handler)
+
+        if not logfile_conf_success:
+            self.logger.warning('Log file path \'%s\' is not writable, falling back to current script location \'%s\'',
+                                self.config['logging']['file_path'], os.path.dirname(__file__))
+
 
 def main():
-    h = TransmissionHelper()
-    args = h.parser.parse_args()
+    transmissionHelper = TransmissionHelper()
+    args = transmissionHelper.parser.parse_args()
 
     # Logging setup
     if vars(args).get('verbose'):
-        h.logger.setLevel(logging.DEBUG)
+        transmissionHelper.logger.setLevel(logging.DEBUG)
+    if vars(args).get('config_file'):
+        transmissionHelper.config_file = args.config_file
+    # TODO
     # Min ratio setup
     if vars(args).get('min-ratio'):
-        h.MIN_SEED_RATIO = args.min_ratio
+        transmissionHelper.MIN_SEED_RATIO = args.min_ratio
+    # TODO
     # Min free space setup
     if vars(args).get('min-free-space'):
-        h.MIN_FREE_SPACE = args.min_free_space
+        transmissionHelper.MIN_FREE_SPACE = args.min_free_space
+
+    transmissionHelper.configure()
 
     # Actions
     if vars(args).get('list_sort'):
-        h.list_torrents()
+        transmissionHelper.list_torrents()
     elif vars(args).get('clean_mode'):
-        h.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
+        transmissionHelper.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
     else:
-        print(h.parser.format_help())
-        exit(1)
+        print(transmissionHelper.parser.format_help())
+        exit(0)
 
 
 if __name__ == "__main__":
