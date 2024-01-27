@@ -343,10 +343,16 @@ class TransmissionHelper:
         # Download dir
         dl_extra_list = []
         dl_dir_list = os.listdir(self.transmission_download_dir)
+        item_found = False
         for item in dl_dir_list:
             for torrent in self.torrent_list:
-                if torrent.name != item:
-                    dl_extra_list.append(item)
+                if torrent.name == item:
+                    item_found = True
+                    break
+            if not item_found:
+                dl_extra_list.append(item)
+            item_found = False
+
         print('Extra items in DL:')
         for e in dl_extra_list:
             print(e)
