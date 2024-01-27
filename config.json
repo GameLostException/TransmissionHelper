@@ -1,13 +1,14 @@
 {
-  "port": "9091",
-  "host": "127.0.0.1",
-  "credentials": {
+  "transmission": {
+    "host": "127.0.0.1",
+    "port": "9091",
     "username": "admin",
-    "password": "admin"
+    "password": "admin",
+    "download_dir": "",
+    "incomplete_dir": ""
   },
-  "mount_point": "/",
   "logging": {
-    "log_level": "INFO",
+    "log_level": "DEBUG",
     "file_name": "transmission_helper.log",
     "file_path": "/var/log"
   }

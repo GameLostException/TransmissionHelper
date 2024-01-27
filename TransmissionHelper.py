@@ -28,16 +28,46 @@ class CleanMode(Enum):
                 raise NotImplementedError
 
 
+class ListMode(Enum):
+    ID = 'id'
+    SIZE = 'size'
+    SEED_RATIO = 'seed_ratio'
+    CREATED = 'created'
+    NAME = 'name'
+    PROGRESS = 'progress'
+
+    @staticmethod
+    def from_str(label):
+        match label:
+            case 'id':
+                return ListMode.ID
+            case 'size':
+                return ListMode.SIZE
+            case 'seed_ratio':
+                return ListMode.SEED_RATIO
+            case 'created':
+                return ListMode.CREATED
+            case 'name':
+                return ListMode.NAME
+            case 'progress':
+                return ListMode.PROGRESS
+            case _:
+                raise NotImplementedError
+
+
 class TransmissionHelper:
-    # The minimum ratio needed to consider removing the torrent and its files
+    # Default minimum ratio needed to consider removing the torrent and its files
     MIN_SEED_RATIO = 3.0
-    # The minimum disk space to keep free. Nothing should be deleted if there is enough free space
+    # Default minimum disk space to keep free. Nothing should be deleted if there is enough free space
     # 100*1024*1024*1024 is 100 GiB
     MIN_FREE_SPACE = 100 * 1024 * 1024 * 1024
-    # Mount point to monitor space for, defaulted to the volume containing this script
-    MOUNT_PT = __file__
-    # Logging location defaulted to the directory containing this script
+    # Mount point to monitor space for, defaulted to the volume containing this script,
+    # ideally the Transmission's download directory so it can also be used for
+    # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
+    TRANSMISSION_DOWNLOAD_DIR = __file__
+    # Default logging location
     LOG_FILE_PATH = '.'
+    # TODO add config_file as default static
 
     # Args parser config with detailed help
     parser = argparse.ArgumentParser(prog='TransmissionHelper',
@@ -56,13 +86,21 @@ class TransmissionHelper:
                                                 the hard-configured value.
                                 * freeSpace:    removes all the torrents needed to free space up to the hard-configured
                                                 value provided they have a minimum seeding ratio.'''))
-    group.add_argument('-l', '--list_sort',
+    group.add_argument('-t', '--list_torrent',
                        choices=['id', 'size', 'seed_ratio', 'created', 'name'],
                        type=str,
                        nargs='?',
                        const='id',
                        help=textwrap.dedent('''\
                             blah'''))
+    group.add_argument('-d', '--storage_delta',
+                       type=str,
+                       nargs='?',
+                       help=textwrap.dedent('''\
+                                Lists gaps between the Transmission torrent list and its downloads directories.
+                                This is based on the configured directories but can be overridden by passing several
+                                paths to this option.
+                                Removal of the non-matching items can be actioned via the --execute option.'''))
     group.required = True
     parser.add_argument('-x', '--execute',
                         action='store_true',
@@ -102,25 +140,71 @@ class TransmissionHelper:
         self.torrent_list_min_free_space = []
         self.torrent_list_min_free_space_size = 0
 
-        # Class
+        # Transmission
         self.client = None
+        self.transmission_download_dir = self.TRANSMISSION_DOWNLOAD_DIR
+        self.transmission_incomplete_dir = None
 
         # Configuration
         self.config_file = 'config.json'
         self.config = None
 
+    def configure(self):
+        # Load configuration file
+        with open(self.config_file, 'r') as conf:
+            try:
+                self.config = json.load(conf)
+            except Exception as e:
+                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, e)
+                exit(2)
+
+        # Setup the file logger
+        logfile_conf_success = False
+        if os.access(self.config['logging']['file_path'], os.W_OK | os.X_OK):
+            self.log_file_path = self.config['logging']['file_path']
+            logfile_conf_success = True
+        file_handler = logging.FileHandler(self.log_file_path + '/' + self.config['logging']['file_name'])
+        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+        self.logger.addHandler(file_handler)
+        if not logfile_conf_success:
+            self.logger.warning('Log file path \'%s\' is not writable, falling back to current script location \'%s\'',
+                                self.config['logging']['file_path'], os.path.dirname(__file__))
+
+        # Set up the download and incomplete directory
+        ## Download
+        dl_conf = self.config['transmission']['download_dir']
+        dl_dir_conf_success = False
+        if os.access(dl_conf, os.F_OK | os.R_OK | os.X_OK):
+            self.transmission_download_dir = dl_conf
+            dl_dir_conf_success = True
+        if not dl_dir_conf_success:
+            self.logger.warning('Transmission download directory path \'%s\' is not readable, '
+                                'falling back to current script location \'%s\'',
+                                dl_conf,
+                                os.path.dirname(self.transmission_download_dir))
+        ## Incomplete
+        inc_conf = self.config['transmission']['incomplete_dir']
+        if not inc_conf:
+            self.logger.info(
+                'Transmission incomplete directory not setup, make sure your Transmission configuration doesn\'t '
+                'have one.')
+        elif not os.access(inc_conf, os.F_OK):
+            self.logger.warning('Transmission incomplete directory \'%s\' does not exist, ignoring.', inc_conf)
+        elif os.access(inc_conf, os.R_OK | os.X_OK):
+            self.transmission_incomplete_dir = inc_conf
+
     def __connect(self):
         try:
-            self.client = Client(host=self.config['host'],
-                                 port=self.config['port'],
-                                 username=self.config['credentials']['username'],
-                                 password=self.config['credentials']['password'])
+            self.client = Client(host=self.config['transmission']['host'],
+                                 port=self.config['transmission']['port'],
+                                 username=self.config['transmission']['username'],
+                                 password=self.config['transmission']['password'])
         except:
             self.logger.error('Could not connect to Transmission server with host=%s, port=%s, login=%s, pwd=%s',
-                              self.config['host'],
-                              self.config['port'],
-                              self.config['credentials']['username'],
-                              self.config['credentials']['password'])
+                              self.config['transmission']['host'],
+                              self.config['transmission']['port'],
+                              self.config['transmission']['username'],
+                              self.config['transmission']['password'])
             exit(-1)
 
     # Helper function to display bytes sizes in a human friendly way
@@ -133,7 +217,7 @@ class TransmissionHelper:
         return f"{size:.{decimal_places}f} {unit}"
 
     def __is_enough_free_space(self):
-        return shutil.disk_usage(self.MOUNT_PT)[2] > self.MIN_FREE_SPACE
+        return shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2] > self.MIN_FREE_SPACE
 
     def __get_torrents_data(self):
         # Connect client
@@ -152,8 +236,9 @@ class TransmissionHelper:
         if not execute:
             self.logger.info("Running in preview mode, no change request is actually sent to Transmission.")
         if self.__is_enough_free_space():
-            self.logger.info("There is more than %s of free space already, no need to clean-up torrents.",
-                             self.__human_readable_size(self.MIN_FREE_SPACE))
+            self.logger.info("There is more than %s of free space already (%s), no need to clean-up torrents yet.",
+                             self.__human_readable_size(self.MIN_FREE_SPACE),
+                             self.__get_human_disk_free_space())
             exit(0)
         # Get the torrents data now
         self.__connect()
@@ -228,56 +313,60 @@ class TransmissionHelper:
         self.client.remove_torrent(ids=torrent_list, delete_data=True)
 
     def __get_disk_free_space(self):
-        return shutil.disk_usage(self.MOUNT_PT)[2]
+        return shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2]
 
     def __get_human_disk_free_space(self):
-        return self.__human_readable_size(shutil.disk_usage(self.MOUNT_PT)[2])
+        return self.__human_readable_size(shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2])
 
     # TODO WIP, need a proper display of the table and setting the sorting options right
     def list_torrents(self):
         self.__connect()
         self.__get_torrents_data()
-        matrix = self.__get_torrent_list_as_matrix(self.torrent_list)
+        matrix_data = self.__get_torrent_list_as_matrix(self.torrent_list)
         # TODO link the sorting types to the ad-hoc cols
         # TODO make sorting by size work (do we add a hidden byte col?)
-        matrix.sort(key=lambda item: item[0])
-        for row in matrix:
+        matrix_data[0].sort(key=lambda item: item[0])
+        print(matrix_data[1])
+        for row in matrix_data[0]:
             print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:.0f} | {:.1f} | {:s} |'.format(*row))
+        print('%d torrents, %s on disk.' % (len(matrix_data[0]), self.__human_readable_size(matrix_data[2])))
+
+    def storage_delta(self):
+        self.__connect()
+        self.__get_torrents_data()
+        if not os.path.isdir(self.transmission_download_dir):
+            self.logger.error('\'%s\' is not a directory, aborting.', self.transmission_download_dir)
+            exit(3)
+        if not os.access(self.transmission_download_dir, os.R_OK | os.X_OK):
+            self.logger.error('Download directory \'%s\' is not readable, aborting.', self.transmission_download_dir)
+            exit(3)
+        # Download dir
+        dl_extra_list = []
+        dl_dir_list = os.listdir(self.transmission_download_dir)
+        for item in dl_dir_list:
+            for torrent in self.torrent_list:
+                if torrent.name != item:
+                    dl_extra_list.append(item)
+        print('Extra items in DL:')
+        for e in dl_extra_list:
+            print(e)
+            # Incomplete dir
 
     @staticmethod
     def __get_torrent_list_as_matrix(torrent_list):
         torrent_matrix = []
+        sum_size = 0
         for torrent in torrent_list:
             torrent_matrix.append([torrent.id,
                                    torrent.name,
                                    torrent.added_date,
+                                   # str(torrent.total_size),
                                    TransmissionHelper.__human_readable_size(torrent.total_size),
                                    torrent.progress,
                                    torrent.ratio,
                                    torrent.status])
-        return torrent_matrix
-
-    def configure(self):
-        # Load configuration
-        with open(self.config_file, 'r') as conf:
-            try:
-                self.config = json.load(conf)
-            except Exception as e:
-                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, e)
-                exit(2)
-
-        # Setup the file logger
-        logfile_conf_success = False
-        if os.access(self.config['logging']['file_path'], os.W_OK | os.X_OK):
-            self.log_file_path = self.config['logging']['file_path']
-            logfile_conf_success = True
-        file_handler = logging.FileHandler(self.log_file_path + '/' + self.config['logging']['file_name'])
-        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
-        self.logger.addHandler(file_handler)
-
-        if not logfile_conf_success:
-            self.logger.warning('Log file path \'%s\' is not writable, falling back to current script location \'%s\'',
-                                self.config['logging']['file_path'], os.path.dirname(__file__))
+            sum_size += torrent.total_size
+        return torrent_matrix, ['ID', 'FileName', 'Added Date', 'Size', 'D/L', 'Ratio', 'Status'], sum_size
 
 
 def main():
@@ -301,10 +390,12 @@ def main():
     transmissionHelper.configure()
 
     # Actions
-    if vars(args).get('list_sort'):
+    if vars(args).get('list_torrent'):
         transmissionHelper.list_torrents()
     elif vars(args).get('clean_mode'):
         transmissionHelper.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
+    elif vars(args).get('storage_delta'):
+        transmissionHelper.storage_delta()
     else:
         print(transmissionHelper.parser.format_help())
         exit(0)
