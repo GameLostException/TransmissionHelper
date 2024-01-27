@@ -355,6 +355,7 @@ class TransmissionHelper:
 
         self.logger.info('Found %s extra items in the download dir \'%s\' (%s torrents, %s items in dl dir)',
                          len(dl_extra_list), self.transmission_download_dir, len(self.torrent_list), len(dl_dir_list))
+        dl_extra_list.sort()
         for e in dl_extra_list:
             print(e)
             # Incomplete dir
