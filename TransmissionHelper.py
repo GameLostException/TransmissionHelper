@@ -95,7 +95,7 @@ class TransmissionHelper:
                             blah'''))
     group.add_argument('-d', '--storage_delta',
                        type=str,
-                       nargs='?',
+                       nargs='*',
                        help=textwrap.dedent('''\
                                 Lists gaps between the Transmission torrent list and its downloads directories.
                                 This is based on the configured directories but can be overridden by passing several
