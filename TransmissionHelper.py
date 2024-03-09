@@ -365,7 +365,10 @@ class TransmissionHelper:
                 file_path_to_delete = self.transmission_download_dir + '/' + f
                 self.logger.debug('Deleting %s' + file_path_to_delete)
                 try:
-                    Path(file_path_to_delete).unlink()
+                    if os.path.isfile(file_path_to_delete):
+                        Path(file_path_to_delete).unlink()
+                    elif os.path.isdir(file_path_to_delete):
+                        shutil.rmtree(file_path_to_delete)
                     print("File deleted successfully.")
                 except FileNotFoundError:
                     print("File not found.")
