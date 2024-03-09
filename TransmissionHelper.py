@@ -331,7 +331,7 @@ class TransmissionHelper:
             print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:.0f} | {:.1f} | {:s} |'.format(*row))
         print('%d torrents, %s on disk.' % (len(matrix_data[0]), self.__human_readable_size(matrix_data[2])))
 
-    def storage_delta(self):
+    def storage_delta(self, execute):
         self.__connect()
         self.__get_torrents_data()
         if not os.path.isdir(self.transmission_download_dir):
@@ -342,6 +342,7 @@ class TransmissionHelper:
             exit(3)
         # Download dir
         dl_extra_list = []
+        dl_extra_id_list = []
         dl_dir_list = os.listdir(self.transmission_download_dir)
         item_found = False
         for item in dl_dir_list:
@@ -351,13 +352,17 @@ class TransmissionHelper:
                     break
             if not item_found:
                 dl_extra_list.append(item)
+                dl_extra_id_list.append(torrent.id)
             item_found = False
 
-        self.logger.info('Found %s extra items in the download dir \'%s\' (%s torrents, %s items in dl dir)',
-                         len(dl_extra_list), self.transmission_download_dir, len(self.torrent_list), len(dl_dir_list))
         dl_extra_list.sort()
         for e in dl_extra_list:
             print(e)
+        self.logger.info('Found %s extra items in the download dir \'%s\' (%s torrents, %s items in dl dir)',
+                         len(dl_extra_list), self.transmission_download_dir, len(self.torrent_list), len(dl_dir_list))
+        if execute:
+            self.logger.debug('Deleting torrents with IDs %s', dl_extra_id_list)
+
             # Incomplete dir
 
     @staticmethod
@@ -378,34 +383,35 @@ class TransmissionHelper:
 
 
 def main():
-    transmissionHelper = TransmissionHelper()
-    args = transmissionHelper.parser.parse_args()
+    transmission_helper = TransmissionHelper()
+    args = transmission_helper.parser.parse_args()
 
     # Logging setup
     if vars(args).get('verbose'):
-        transmissionHelper.logger.setLevel(logging.DEBUG)
+        transmission_helper.logger.setLevel(logging.DEBUG)
     if vars(args).get('config_file'):
-        transmissionHelper.config_file = args.config_file
+        transmission_helper.config_file = args.config_file
     # TODO
     # Min ratio setup
     if vars(args).get('min-ratio'):
-        transmissionHelper.MIN_SEED_RATIO = args.min_ratio
+        transmission_helper.MIN_SEED_RATIO = args.min_ratio
     # TODO
     # Min free space setup
     if vars(args).get('min-free-space'):
-        transmissionHelper.MIN_FREE_SPACE = args.min_free_space
+        transmission_helper.MIN_FREE_SPACE = args.min_free_space
 
-    transmissionHelper.configure()
+    transmission_helper.configure()
 
     # Actions
     if vars(args).get('list_torrent'):
-        transmissionHelper.list_torrents()
+        transmission_helper.list_torrents()
     elif vars(args).get('clean_mode'):
-        transmissionHelper.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
-    elif vars(args).get('storage_delta'):
-        transmissionHelper.storage_delta()
+        transmission_helper.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
+    # elif vars(args).get('storage_delta'):
+    elif args.storage_delta is not None:
+        transmission_helper.storage_delta(args.execute)
     else:
-        print(transmissionHelper.parser.format_help())
+        print(transmission_helper.parser.format_help())
         exit(0)
 
 
