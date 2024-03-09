@@ -5,6 +5,7 @@ import os
 import shutil
 import sys
 import textwrap
+from pathlib import Path
 
 from transmission_rpc import Client
 from enum import Enum
@@ -361,7 +362,17 @@ class TransmissionHelper:
         if execute:
             self.logger.debug('Deleting files:')
             for f in dl_extra_list:
-                self.logger.debug(self.transmission_download_dir + '/' + f)
+                file_path_to_delete = self.transmission_download_dir + '/' + f
+                self.logger.debug('Deleting %s' + file_path_to_delete)
+                try:
+                    Path(file_path_to_delete).unlink()
+                    print("File deleted successfully.")
+                except FileNotFoundError:
+                    print("File not found.")
+                except PermissionError:
+                    print("Permission denied. Unable to delete the file.")
+                except Exception as e:
+                    print("An error occurred:", e)
 
             # Incomplete dir
 
