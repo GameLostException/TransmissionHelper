@@ -342,7 +342,6 @@ class TransmissionHelper:
             exit(3)
         # Download dir
         dl_extra_list = []
-        dl_extra_id_list = []
         dl_dir_list = os.listdir(self.transmission_download_dir)
         item_found = False
         for item in dl_dir_list:
@@ -352,7 +351,6 @@ class TransmissionHelper:
                     break
             if not item_found:
                 dl_extra_list.append(item)
-                dl_extra_id_list.append(torrent.id)
             item_found = False
 
         dl_extra_list.sort()
@@ -361,7 +359,9 @@ class TransmissionHelper:
         self.logger.info('Found %s extra items in the download dir \'%s\' (%s torrents, %s items in dl dir)',
                          len(dl_extra_list), self.transmission_download_dir, len(self.torrent_list), len(dl_dir_list))
         if execute:
-            self.logger.debug('Deleting torrents with IDs %s', dl_extra_id_list)
+            self.logger.debug('Deleting files:')
+            for f in dl_extra_list:
+                self.logger.debug(self.transmission_download_dir + '/' + f)
 
             # Incomplete dir
 
