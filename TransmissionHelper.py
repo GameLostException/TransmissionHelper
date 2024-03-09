@@ -363,7 +363,7 @@ class TransmissionHelper:
             self.logger.debug('Deleting files:')
             for f in dl_extra_list:
                 file_path_to_delete = self.transmission_download_dir + '/' + f
-                self.logger.debug('Deleting %s' + file_path_to_delete)
+                self.logger.debug('Deleting %s', file_path_to_delete)
                 try:
                     if os.path.isfile(file_path_to_delete):
                         Path(file_path_to_delete).unlink()
