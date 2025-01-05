@@ -65,7 +65,7 @@ class TransmissionHelper:
     # Mount point to monitor space for, defaulted to the volume containing this script,
     # ideally the Transmission's download directory so it can also be used for
     # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
-    TRANSMISSION_DOWNLOAD_DIR = __file__
+    TRANSMISSION_COMPLETE_DIR = __file__
     # Default logging location
     LOG_FILE_PATH = '.'
     # TODO add config_file as default static
@@ -75,6 +75,7 @@ class TransmissionHelper:
                                      description='Suite of CLI utilities for Transmission',
                                      epilog='gamelostexcpetion@gmail.com',
                                      formatter_class=argparse.RawTextHelpFormatter)
+
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-c', '--clean_mode',
                        choices=['seed_ratio', 'free_space'],
@@ -125,6 +126,10 @@ class TransmissionHelper:
                         help=textwrap.dedent('''\
                                 Enable debug-level logging, both on stdout and logging file.'''))
 
+    if len(sys.argv) < 2:
+        parser.print_help()
+        sys.exit(1)
+
     def __init__(self):
         # Default logging
         self.logger = logging.getLogger(__name__)
@@ -143,7 +148,7 @@ class TransmissionHelper:
 
         # Transmission
         self.client = None
-        self.transmission_download_dir = self.TRANSMISSION_DOWNLOAD_DIR
+        self.transmission_download_dir = self.TRANSMISSION_COMPLETE_DIR
         self.transmission_incomplete_dir = None
 
         # Configuration
@@ -218,7 +223,7 @@ class TransmissionHelper:
         return f"{size:.{decimal_places}f} {unit}"
 
     def __is_enough_free_space(self):
-        return shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2] > self.MIN_FREE_SPACE
+        return shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2] > self.MIN_FREE_SPACE
 
     def __get_torrents_data(self):
         # Connect client
@@ -314,10 +319,10 @@ class TransmissionHelper:
         self.client.remove_torrent(ids=torrent_list, delete_data=True)
 
     def __get_disk_free_space(self):
-        return shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2]
+        return shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2]
 
     def __get_human_disk_free_space(self):
-        return self.__human_readable_size(shutil.disk_usage(self.TRANSMISSION_DOWNLOAD_DIR)[2])
+        return self.__human_readable_size(shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2])
 
     # TODO WIP, need a proper display of the table and setting the sorting options right
     def list_torrents(self):
@@ -357,8 +362,12 @@ class TransmissionHelper:
         dl_extra_list.sort()
         for e in dl_extra_list:
             print(e)
-        self.logger.info('Found %s extra items in the download dir \'%s\' (%s torrents, %s items in dl dir)',
-                         len(dl_extra_list), self.transmission_download_dir, len(self.torrent_list), len(dl_dir_list))
+        self.logger.info('Found %s files in the Transmission "complete" dir (over the %s total) that are not tracked '
+                         'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').'
+                         '\nYou may add the --execute flag to delete them.',
+                         len(dl_extra_list), len(dl_dir_list), len(self.torrent_list), len(dl_dir_list),
+                         self.transmission_download_dir)
+
         if execute:
             self.logger.debug('Deleting files:')
             for f in dl_extra_list:
@@ -377,7 +386,7 @@ class TransmissionHelper:
                 except Exception as e:
                     print("An error occurred:", e)
 
-            # Incomplete dir
+            # TODO Incomplete dir
 
     @staticmethod
     def __get_torrent_list_as_matrix(torrent_list):
