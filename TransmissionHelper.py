@@ -199,7 +199,7 @@ class TransmissionHelper:
         return f"{size:.{decimal_places}f} {unit}"
 
     def __is_enough_free_space(self):
-        return shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2] > self.MIN_FREE_SPACE
+        return self.__get_disk_free_space() > self.MIN_FREE_SPACE
 
     def __get_torrents(self):
         # Connect client
@@ -279,10 +279,10 @@ class TransmissionHelper:
         self.client.remove_torrent(ids=torrent_list, delete_data=True)
 
     def __get_disk_free_space(self):
-        return shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2]
+        return shutil.disk_usage(self.transmission_complete_dir)[2]
 
     def __get_human_disk_free_space(self):
-        return self.__human_readable_size(shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2])
+        return self.__human_readable_size(self.__get_disk_free_space())
 
     # TODO WIP, need a proper display of the table and setting the sorting options right
     def list_torrents(self):
