@@ -11,24 +11,6 @@ from transmission_rpc import Client
 from enum import Enum
 
 
-class CleanMode(Enum):
-    # Clean all the torrents that have seeded at least for the MIN_SEED_RATIO value
-    MIN_SEED_RATIO = 'seed-ratio'
-    # Clean the torrents that have seeded at least for the MIN_SEED_RATIO value up to what is needed to free
-    # space up to the MIN_FREE_SPACE value
-    MIN_FREE_SPACE = 'free-space'
-
-    @staticmethod
-    def from_str(label):
-        match label:
-            case 'seed_ratio':
-                return CleanMode.MIN_SEED_RATIO
-            case 'free_space':
-                return CleanMode.MIN_FREE_SPACE
-            case _:
-                raise NotImplementedError
-
-
 class ListMode(Enum):
     ID = 'id'
     SIZE = 'size'
@@ -58,11 +40,11 @@ class ListMode(Enum):
 
 class TransmissionHelper:
     # Default minimum ratio needed to consider removing the torrent and its files
-    MIN_SEED_RATIO = 3.0
+    MIN_SEED_RATIO = 0.0  # TODO make it overrideable by the ad-hoc option
     # Default minimum disk space to keep free. Nothing should be deleted if there is enough free space
     # 100*1024*1024*1024 is 100 GiB
     MIN_FREE_SPACE = 100 * 1024 * 1024 * 1024
-    # Mount point to monitor space for, defaulted to the volume containing this script,
+    # Mount point to monitor space of, defaulted to the volume containing this script,
     # ideally the Transmission's download directory so it can also be used for
     # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
     TRANSMISSION_COMPLETE_DIR = __file__
@@ -78,16 +60,13 @@ class TransmissionHelper:
 
     group = parser.add_mutually_exclusive_group()
     group.add_argument('-c', '--clean_mode',
-                       choices=['seed_ratio', 'free_space'],
-                       type=str,
-                       nargs='?',
-                       const='free_space',
+                       action='store_true',
                        help=textwrap.dedent('''\
-                            Cleans the torrents using either of 2 modes:
-                                * seedRatio:    removes all the torrents that have already seeded above
-                                                the hard-configured value.
-                                * freeSpace:    removes all the torrents needed to free space up to the hard-configured
-                                                value provided they have a minimum seeding ratio.'''))
+                            Cleans the torrents using the following criterion:
+                                1. freeSpace:   removes all the torrents needed to free space up to the configured
+                                                value.
+                                2. seedRatio:   restrict the removal of the torrents to those not having already seeded above
+                                                the configured "min_ratio" value.'''))
     group.add_argument('-t', '--list_torrent',
                        choices=['id', 'size', 'seed_ratio', 'created', 'name'],
                        type=str,
@@ -108,19 +87,19 @@ class TransmissionHelper:
                         action='store_true',
                         help=textwrap.dedent('''\
                             By default no impacting action is taken toward Transmission, this flag
-                            is needed to overrides this behaviour'''))
+                            is needed to overrides this behaviour.'''))
     parser.add_argument('-f', '--config_file',
                         help=textwrap.dedent('''\
                                 Full path of the config file to use, defaults to ./config.json'''))
     parser.add_argument('-r', '--min_ratio',
                         type=float,
                         help=textwrap.dedent('''\
-                                    Minimum seeding ratio used as a filter for the listing and cleaning options'''))
+                                    Minimum seeding ratio used for the cleaning by seed_ratio option, defaults to 0.'''))
     parser.add_argument('-s', '--min_free_space',
                         type=int,
                         help=textwrap.dedent('''\
-                                        Minimum desired free space in Bytes, 
-                                        applies to the listing and cleaning options'''))
+                                        Minimum desired free space in Bytes used for the cleaning by free_space option, 
+                                        defaults to 107374182400 B (100 GiB).'''))
     parser.add_argument('-v', '--verbose',
                         action='store_true',
                         help=textwrap.dedent('''\
@@ -141,14 +120,11 @@ class TransmissionHelper:
 
         # Torrent lists
         self.torrent_list = []
-        self.torrent_list_min_ratio = []
-        self.torrent_list_min_ratio_size = 0
-        self.torrent_list_min_free_space = []
-        self.torrent_list_min_free_space_size = 0
+        self.torrent_list_space = 0
 
         # Transmission
         self.client = None
-        self.transmission_download_dir = self.TRANSMISSION_COMPLETE_DIR
+        self.transmission_complete_dir = self.TRANSMISSION_COMPLETE_DIR
         self.transmission_incomplete_dir = None
 
         # Configuration
@@ -181,13 +157,13 @@ class TransmissionHelper:
         dl_conf = self.config['transmission']['download_dir']
         dl_dir_conf_success = False
         if os.access(dl_conf, os.F_OK | os.R_OK | os.X_OK):
-            self.transmission_download_dir = dl_conf
+            self.transmission_complete_dir = dl_conf
             dl_dir_conf_success = True
         if not dl_dir_conf_success:
             self.logger.warning('Transmission download directory path \'%s\' is not readable, '
                                 'falling back to current script location \'%s\'',
                                 dl_conf,
-                                os.path.dirname(self.transmission_download_dir))
+                                os.path.dirname(self.transmission_complete_dir))
         ## Incomplete
         inc_conf = self.config['transmission']['incomplete_dir']
         if not inc_conf:
@@ -225,92 +201,76 @@ class TransmissionHelper:
     def __is_enough_free_space(self):
         return shutil.disk_usage(self.TRANSMISSION_COMPLETE_DIR)[2] > self.MIN_FREE_SPACE
 
-    def __get_torrents_data(self):
+    def __get_torrents(self):
         # Connect client
+        self.__connect()
         # Get the Transmission torrent list
         self.torrent_list = self.client.get_torrents()
-        # Order by highest seeding ratio first
+        # Order by highest seeding ratio first, regardless of criteria
         self.torrent_list.sort(reverse=True, key=lambda torrent: torrent.upload_ratio)
-        # Get a sublist of only the torrents having a minimum seeding ratio
-        self.torrent_list_min_ratio = list(filter(lambda torrent: torrent.upload_ratio >= self.MIN_SEED_RATIO,
-                                                  self.torrent_list))
-        # Compute the total size of the top_uploaded_list
-        for t in self.torrent_list_min_ratio:
-            self.torrent_list_min_ratio_size += t.total_size
+        # Compute the total size of the list
+        for t in self.torrent_list:
+            self.torrent_list_space += t.total_size
 
-    def cleanup(self, clean_mode, execute):
-        if not execute:
-            self.logger.info("Running in preview mode, no change request is actually sent to Transmission.")
-        if self.__is_enough_free_space():
-            self.logger.info("There is more than %s of free space already (%s), no need to clean-up torrents yet.",
-                             self.__human_readable_size(self.MIN_FREE_SPACE),
-                             self.__get_human_disk_free_space())
+    def cleanup(self, execute):
+        # We check if a clean is needed and exit otherwise
+        if self.__get_disk_free_space() >= self.MIN_FREE_SPACE:
+            self.logger.info("There is already more free space (%s) than the minimum required (%s), aborting.",
+                             self.__human_readable_size(self.__get_disk_free_space()),
+                             self.__human_readable_size(self.MIN_FREE_SPACE))
             exit(0)
-        # Get the torrents data now
-        self.__connect()
-        self.__get_torrents_data()
-        # Check we have material to clean
-        if self.torrent_list_min_ratio_size == 0.0:
-            self.logger.info('There is no eligible torrent to clean-up, consider changing the sorting and '
-                             'filters criteria of the Transmission torrent list.')
-            exit(1)
-        # Clean according to the passed CleanMode
-        match clean_mode:
-            case CleanMode.MIN_FREE_SPACE:
-                # Compute the space we need to free to obtain MIN_FREE_SPACE
-                space_to_free = self.MIN_FREE_SPACE - self.__get_disk_free_space()
-                total_torrents_to_clean = 0
-                for t in self.torrent_list_min_ratio:
-                    if total_torrents_to_clean < space_to_free:
-                        total_torrents_to_clean += t.total_size
-                        self.torrent_list_min_free_space.append(t)
-                    else:
-                        break
-                # Get the total size of torrent gathered
-                for t in self.torrent_list_min_free_space:
-                    self.torrent_list_min_free_space_size += t.total_size
-                self.logger.info("Cleaning by freeSpace: "
-                                 "%s are already free, need at least %s more to reach the %s mark. "
-                                 "Will actually free %s more to reach a total of %s free space.",
-                                 self.__get_human_disk_free_space(),
-                                 self.__human_readable_size(space_to_free),
-                                 self.__human_readable_size(self.MIN_FREE_SPACE),
-                                 self.__human_readable_size(self.torrent_list_min_free_space_size),
-                                 self.__human_readable_size(self.__get_disk_free_space()
-                                                            + self.torrent_list_min_free_space_size))
-                min_free_space_torrents_id_list = [tx.id for tx in list(self.torrent_list_min_free_space)]
-                self.logger.debug("Target is %d torrents with IDs %s",
-                                  len(self.torrent_list_min_free_space),
-                                  min_free_space_torrents_id_list)
-                if execute:
-                    self.logger.info('Removing %d torrents for a total of %s', len(min_free_space_torrents_id_list),
-                                     self.__human_readable_size(self.torrent_list_min_free_space_size))
-                    self.__remove_torrents(min_free_space_torrents_id_list)
-            case CleanMode.MIN_SEED_RATIO:
-                self.logger.info("Cleaning by seedRatio: "
-                                 "%s are already free, "
-                                 "removing all torrents above %.1f seeding ratio will free an additional %s space "
-                                 "for a total of %s free space.",
-                                 self.__get_human_disk_free_space(),
-                                 self.MIN_SEED_RATIO,
-                                 self.__human_readable_size(self.torrent_list_min_ratio_size),
-                                 self.__human_readable_size(self.__get_disk_free_space()
-                                                            + self.torrent_list_min_ratio_size))
-                min_ratio_torrents_id_list = [tx.id for tx in list(self.torrent_list_min_ratio)]
-                self.logger.debug("Target is %d torrents for a total of %s",
-                                  len(self.torrent_list_min_ratio),
-                                  self.__human_readable_size(self.torrent_list_min_ratio_size))
-                if execute:
-                    self.logger.info('Removing torrents with IDs ', min_ratio_torrents_id_list)
-                    self.__remove_torrents(min_ratio_torrents_id_list)
+
+        if not execute:
+            self.logger.info("Running in preview mode, no deletion request will actually be sent to Transmission.")
+
+        # Get the torrents data
+        self.__get_torrents()
+
+        space_to_free = self.MIN_FREE_SPACE - self.__get_disk_free_space()
+        cleanable_space = 0
+        torrents_to_clean = []
+        self.logger.info("%s are already free so we need at least %s more to reach the %s mark.",
+                         self.__get_human_disk_free_space(), self.__human_readable_size(space_to_free),
+                         self.__human_readable_size(self.MIN_FREE_SPACE))
+        for t in self.torrent_list:
+            # As long as we need to free space...
+            if cleanable_space < space_to_free:
+                # and as long as the min_ratio allows...
+                if t.ratio > self.MIN_SEED_RATIO:
+                    # We collect the current torrent for further deletion
+                    cleanable_space += t.total_size
+                    torrents_to_clean.append(t)
+            else:
+                break
+
+        # Case where we can't find enough torrent to clean
+        if cleanable_space < space_to_free:
+            self.logger.info(
+                "There is not enough eligible torrents to clean (%d among %d) to reach the %s free space mark. "
+                "Consider lowering the minimum seeding ratio (now %.1f).", len(torrents_to_clean),
+                len(self.torrent_list),
+                self.__human_readable_size(self.MIN_FREE_SPACE), self.MIN_SEED_RATIO)
+            if len(torrents_to_clean) == 0:
+                exit(0)
+
+        # Regardless, we now clean what we can
+        self.logger.info("%d torrents will be deleted to free %s more and reach a total of %s free space.",
+                         len(torrents_to_clean),
+                         self.__human_readable_size(cleanable_space),
+                         self.__human_readable_size(space_to_free + self.__get_disk_free_space()))
+        torrents_to_clean_id_list = [tx.id for tx in list(torrents_to_clean)]
+
+        if execute:
+            self.__remove_torrents(torrents_to_clean_id_list)
+
         # Check for the cleaning results
         if self.__get_disk_free_space() >= self.MIN_FREE_SPACE:
             self.logger.info("There is now %s of free space, no more cleaning action needed for now.",
                              self.__get_human_disk_free_space())
         else:
-            self.logger.info("There is now %s of free space which is still below the minimum that has been setup, %s. "
-                             "Consider running this script with either of a lower minimum seeding ratio (now %.1f), "
-                             "a lesser minimum free disk space value, and make sure it executes (-x option).",
+            self.logger.info("There is now %s of free space which is still below the minimum %s that has been setup. "
+                             "Consider running this script with a lower minimum seeding ratio (now %.1f) and/or "
+                             "a lesser minimum free disk space value (now ), and make sure it executes (-x option).",
                              self.__get_human_disk_free_space(),
                              self.__human_readable_size(self.MIN_FREE_SPACE),
                              self.MIN_SEED_RATIO)
@@ -327,7 +287,7 @@ class TransmissionHelper:
     # TODO WIP, need a proper display of the table and setting the sorting options right
     def list_torrents(self):
         self.__connect()
-        self.__get_torrents_data()
+        self.__get_torrents()
         matrix_data = self.__get_torrent_list_as_matrix(self.torrent_list)
         # TODO link the sorting types to the ad-hoc cols
         # TODO make sorting by size work (do we add a hidden byte col?)
@@ -339,16 +299,16 @@ class TransmissionHelper:
 
     def storage_delta(self, execute):
         self.__connect()
-        self.__get_torrents_data()
-        if not os.path.isdir(self.transmission_download_dir):
-            self.logger.error('\'%s\' is not a directory, aborting.', self.transmission_download_dir)
+        self.__get_torrents()
+        if not os.path.isdir(self.transmission_complete_dir):
+            self.logger.error('\'%s\' is not a directory, aborting.', self.transmission_complete_dir)
             exit(3)
-        if not os.access(self.transmission_download_dir, os.R_OK | os.X_OK):
-            self.logger.error('Download directory \'%s\' is not readable, aborting.', self.transmission_download_dir)
+        if not os.access(self.transmission_complete_dir, os.R_OK | os.X_OK):
+            self.logger.error('Download directory \'%s\' is not readable, aborting.', self.transmission_complete_dir)
             exit(3)
         # Download dir
         dl_extra_list = []
-        dl_dir_list = os.listdir(self.transmission_download_dir)
+        dl_dir_list = os.listdir(self.transmission_complete_dir)
         item_found = False
         for item in dl_dir_list:
             for torrent in self.torrent_list:
@@ -366,12 +326,12 @@ class TransmissionHelper:
                          'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').'
                          '\nYou may add the --execute flag to delete them.',
                          len(dl_extra_list), len(dl_dir_list), len(self.torrent_list), len(dl_dir_list),
-                         self.transmission_download_dir)
+                         self.transmission_complete_dir)
 
         if execute:
             self.logger.debug('Deleting files:')
             for f in dl_extra_list:
-                file_path_to_delete = self.transmission_download_dir + '/' + f
+                file_path_to_delete = self.transmission_complete_dir + '/' + f
                 self.logger.debug('Deleting %s', file_path_to_delete)
                 try:
                     if os.path.isfile(file_path_to_delete):
@@ -429,8 +389,9 @@ def main():
     if vars(args).get('list_torrent'):
         transmission_helper.list_torrents()
     elif vars(args).get('clean_mode'):
-        transmission_helper.cleanup(CleanMode.from_str(args.clean_mode), args.execute)
+        transmission_helper.cleanup(args.execute)
     # elif vars(args).get('storage_delta'):
+    # TODO implement the directories override?
     elif args.storage_delta is not None:
         transmission_helper.storage_delta(args.execute)
     else:
