@@ -268,9 +268,9 @@ class TransmissionHelper:
             self.logger.info("There is now %s of free space, no more cleaning action needed for now.",
                              self.__get_human_disk_free_space())
         else:
-            self.logger.info("There is now %s of free space which is still below the minimum %s that has been setup. "
+            self.logger.warning("There is now %s of free space which is still below the minimum desired (now %s). "
                              "Consider running this script with a lower minimum seeding ratio (now %.1f) and/or "
-                             "a lesser minimum free disk space value (now ), and make sure it executes (-x option).",
+                             "a lesser minimum free disk space value, and make sure it executes (-x option).",
                              self.__get_human_disk_free_space(),
                              self.__human_readable_size(self.MIN_FREE_SPACE),
                              self.MIN_SEED_RATIO)
@@ -291,10 +291,11 @@ class TransmissionHelper:
         matrix_data = self.__get_torrent_list_as_matrix(self.torrent_list)
         # TODO link the sorting types to the ad-hoc cols
         # TODO make sorting by size work (do we add a hidden byte col?)
-        matrix_data[0].sort(key=lambda item: item[0])
-        print(matrix_data[1])
+        matrix_data[0].sort(key=lambda item: item[5])
+        # TODO clean that formatting mess...
+        print('| {:4s} | {:80.80s} | {:19s} | {:10.10s} | {:3.0s} % | {:3.1s} | {:16s} |'.format(*matrix_data[1]))
         for row in matrix_data[0]:
-            print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:.0f} | {:.1f} | {:s} |'.format(*row))
+            print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:3.0f} % | {:>3.2f} | {:16s} |'.format(*row))
         print('%d torrents, %s on disk.' % (len(matrix_data[0]), self.__human_readable_size(matrix_data[2])))
 
     def storage_delta(self, execute):
@@ -320,31 +321,32 @@ class TransmissionHelper:
             item_found = False
 
         dl_extra_list.sort()
-        for e in dl_extra_list:
-            print(e)
         self.logger.info('Found %s files in the Transmission "complete" dir (over the %s total) that are not tracked '
                          'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').'
                          '\nYou may add the --execute flag to delete them.',
                          len(dl_extra_list), len(dl_dir_list), len(self.torrent_list), len(dl_dir_list),
                          self.transmission_complete_dir)
+        for e in dl_extra_list:
+            self.logger.debug(e)
 
         if execute:
-            self.logger.debug('Deleting files:')
+            self.logger.info('Deleting files...')
             for f in dl_extra_list:
                 file_path_to_delete = self.transmission_complete_dir + '/' + f
-                self.logger.debug('Deleting %s', file_path_to_delete)
+                self.logger.debug('Deleting %s...', file_path_to_delete)
                 try:
                     if os.path.isfile(file_path_to_delete):
                         Path(file_path_to_delete).unlink()
                     elif os.path.isdir(file_path_to_delete):
                         shutil.rmtree(file_path_to_delete)
-                    print("File deleted successfully.")
+                    self.logger.debug("...file deleted successfully.")
                 except FileNotFoundError:
-                    print("File not found.")
+                    self.logger.error("File not found.")
                 except PermissionError:
-                    print("Permission denied. Unable to delete the file.")
+                    self.logger.error("Permission denied. Unable to delete the file.")
                 except Exception as e:
-                    print("An error occurred:", e)
+                    self.logger.error("An error occurred:", e)
+            self.logger.info('...Done deleting files.')
 
             # TODO Incomplete dir
 
@@ -374,13 +376,11 @@ def main():
         transmission_helper.logger.setLevel(logging.DEBUG)
     if vars(args).get('config_file'):
         transmission_helper.config_file = args.config_file
-    # TODO
     # Min ratio setup
-    if vars(args).get('min-ratio'):
+    if vars(args).get('min_ratio'):
         transmission_helper.MIN_SEED_RATIO = args.min_ratio
-    # TODO
     # Min free space setup
-    if vars(args).get('min-free-space'):
+    if vars(args).get('min_free_space'):
         transmission_helper.MIN_FREE_SPACE = args.min_free_space
 
     transmission_helper.configure()
