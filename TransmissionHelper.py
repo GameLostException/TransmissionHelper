@@ -131,7 +131,7 @@ class TransmissionHelper:
         self.transmission_incomplete_dir = None
 
         # Configuration
-        self.config_file = 'config.json'
+        self.config_file = os.path.dirname(__file__) + 'config.json'
         self.config = None
 
     def configure(self):
