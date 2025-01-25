@@ -117,14 +117,14 @@ class TransmissionHelper:
         self.log_file_name = self.LOG_FILE_NAME
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.INFO)
-        ## std out
+        # # std out
         std_handler = logging.StreamHandler(stream=sys.stdout)
         std_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
         self.logger.addHandler(std_handler)
-        ## default logging file
-        file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
-        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
-        self.logger.addHandler(file_handler)
+        # # default logging file
+        self.file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
+        self.file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+        self.logger.addHandler(self.file_handler)
 
         # Torrent lists
         self.torrent_list = []
@@ -153,19 +153,22 @@ class TransmissionHelper:
             exit(2)
 
         # Setup the file logger
-        logfile_conf_success = False
         if os.access(self.config['logging']['file_path'], os.W_OK | os.X_OK):
+            # removing our default file handler
+            self.logger.removeHandler(self.file_handler)
+            # Setting up the valid configured one
             self.log_file_path = self.config['logging']['file_path']
-            logfile_conf_success = True
-        file_handler = logging.FileHandler(self.log_file_path + '/' + self.config['logging']['file_name'])
-        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
-        self.logger.addHandler(file_handler)
-        if not logfile_conf_success:
+            self.log_file_name = self.config['logging']['file_name']
+            self.file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
+            self.file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+            self.logger.addHandler(self.file_handler)
+        else:
+            # Nothing to do here, we already have a default valid file handler
             self.logger.warning('Log file path \'%s\' is not writable, falling back to current script location \'%s\'',
-                                self.config['logging']['file_path'], os.path.dirname(__file__))
+                                self.config['logging']['file_path'], self.log_file_path + '/' + self.log_file_name)
 
         # Set up the download and incomplete directory
-        ## Download
+        # # Download
         dl_conf = self.config['transmission']['download_dir']
         dl_dir_conf_success = False
         if os.access(dl_conf, os.F_OK | os.R_OK | os.X_OK):
@@ -176,7 +179,7 @@ class TransmissionHelper:
                                 'falling back to current script location \'%s\'',
                                 dl_conf,
                                 os.path.dirname(self.transmission_complete_dir))
-        ## Incomplete
+        # # Incomplete
         inc_conf = self.config['transmission']['incomplete_dir']
         if not inc_conf:
             self.logger.info(
