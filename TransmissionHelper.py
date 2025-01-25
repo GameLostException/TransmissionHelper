@@ -50,6 +50,8 @@ class TransmissionHelper:
     TRANSMISSION_COMPLETE_DIR = __file__
     # Default logging location
     LOG_FILE_PATH = '.'
+    # Default logging location
+    LOG_FILE_NAME = 'TransmissionHelper.log'
     # TODO add config_file as default static
 
     # Args parser config with detailed help
@@ -117,6 +119,7 @@ class TransmissionHelper:
         self.logger.addHandler(std_handler)
         self.logger.setLevel(logging.INFO)
         self.log_file_path = self.LOG_FILE_PATH
+        self.log_file_name = self.LOG_FILE_NAME
 
         # Torrent lists
         self.torrent_list = []
@@ -137,6 +140,10 @@ class TransmissionHelper:
             try:
                 self.config = json.load(conf)
             except:
+                # We don't have a proper logger yet, creating one just for this exception
+                file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
+                file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+                self.logger.addHandler(file_handler)
                 self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, repr(sys.exception()))
                 exit(2)
 
