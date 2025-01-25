@@ -42,8 +42,8 @@ class TransmissionHelper:
     # Default minimum ratio needed to consider removing the torrent and its files
     MIN_SEED_RATIO = 0.0  # TODO make it overrideable by the ad-hoc option
     # Default minimum disk space to keep free. Nothing should be deleted if there is enough free space
-    # 100*1024*1024*1024 is 100 GiB
-    MIN_FREE_SPACE = 100 * 1024 * 1024 * 1024
+    # 20*1024*1024*1024 is 20 GiB
+    MIN_FREE_SPACE = 20 * 1024 * 1024 * 1024
     # Mount point to monitor space of, defaulted to the volume containing this script,
     # ideally the Transmission's download directory so it can also be used for
     # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
@@ -136,8 +136,8 @@ class TransmissionHelper:
         with open(self.config_file, 'r') as conf:
             try:
                 self.config = json.load(conf)
-            except Exception as e:
-                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, e)
+            except:
+                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, repr(sys.exception()))
                 exit(2)
 
         # Setup the file logger

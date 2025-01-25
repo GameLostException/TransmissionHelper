@@ -8,8 +8,8 @@
     "incomplete_dir": ""
   },
   "logging": {
-    "log_level": "DEBUG",
-    "file_name": "transmission_helper.log",
+    "log_level": "INFO",
+    "file_name": "TransmissionHelper.log",
     "file_path": "/var/log"
   }
 }
