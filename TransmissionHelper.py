@@ -47,7 +47,7 @@ class TransmissionHelper:
     # Mount point to monitor space of, defaulted to the volume containing this script,
     # ideally the Transmission's download directory so it can also be used for
     # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
-    TRANSMISSION_COMPLETE_DIR = __file__
+    TRANSMISSION_COMPLETE_DIR = None
     # Default logging location
     LOG_FILE_PATH = os.path.dirname(__file__)
     # Default logging location
@@ -113,13 +113,18 @@ class TransmissionHelper:
 
     def __init__(self):
         # Default logging
+        self.log_file_path = self.LOG_FILE_PATH
+        self.log_file_name = self.LOG_FILE_NAME
         self.logger = logging.getLogger(__name__)
+        self.logger.setLevel(logging.INFO)
+        ## std out
         std_handler = logging.StreamHandler(stream=sys.stdout)
         std_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
         self.logger.addHandler(std_handler)
-        self.logger.setLevel(logging.INFO)
-        self.log_file_path = self.LOG_FILE_PATH
-        self.log_file_name = self.LOG_FILE_NAME
+        ## default logging file
+        file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
+        file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
+        self.logger.addHandler(file_handler)
 
         # Torrent lists
         self.torrent_list = []
@@ -134,18 +139,19 @@ class TransmissionHelper:
         self.config_file = os.path.dirname(__file__) + 'config.json'
         self.config = None
 
+        # Parameters
+        self.min_free_space = self.MIN_FREE_SPACE
+        self.min_seed_ratio = self.MIN_SEED_RATIO
+
+
     def configure(self):
         # Load configuration file
-        with open(self.config_file, 'r') as conf:
-            try:
-                self.config = json.load(conf)
-            except:
-                # We don't have a proper logger yet, creating one just for this exception
-                file_handler = logging.FileHandler(self.log_file_path + '/' + self.log_file_name)
-                file_handler.setFormatter(logging.Formatter('[%(asctime)s] [%(levelname)s] %(message)s'))
-                self.logger.addHandler(file_handler)
-                self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file, repr(sys.exception()))
-                exit(2)
+        try:
+            self.config = json.load(open(self.config_file, 'r'))
+        except:
+            self.logger.error('Could not parse config file \'%s\', parser returned \'%s\'', self.config_file,
+                              repr(sys.exception()))
+            exit(2)
 
         # Setup the file logger
         logfile_conf_success = False
@@ -206,7 +212,7 @@ class TransmissionHelper:
         return f"{size:.{decimal_places}f} {unit}"
 
     def __is_enough_free_space(self):
-        return self.__get_disk_free_space() > self.MIN_FREE_SPACE
+        return self.__get_disk_free_space() > self.min_free_space
 
     def __get_torrents(self):
         # Connect client
@@ -221,10 +227,10 @@ class TransmissionHelper:
 
     def cleanup(self, execute):
         # We check if a clean is needed and exit otherwise
-        if self.__get_disk_free_space() >= self.MIN_FREE_SPACE:
+        if self.__get_disk_free_space() >= self.min_free_space:
             self.logger.info("There is already more free space (%s) than the minimum required (%s), aborting.",
                              self.__human_readable_size(self.__get_disk_free_space()),
-                             self.__human_readable_size(self.MIN_FREE_SPACE))
+                             self.__human_readable_size(self.min_free_space))
             exit(0)
 
         if not execute:
@@ -233,17 +239,17 @@ class TransmissionHelper:
         # Get the torrents data
         self.__get_torrents()
 
-        space_to_free = self.MIN_FREE_SPACE - self.__get_disk_free_space()
+        space_to_free = self.min_free_space - self.__get_disk_free_space()
         cleanable_space = 0
         torrents_to_clean = []
         self.logger.info("%s are already free so we need at least %s more to reach the %s mark.",
                          self.__get_human_disk_free_space(), self.__human_readable_size(space_to_free),
-                         self.__human_readable_size(self.MIN_FREE_SPACE))
+                         self.__human_readable_size(self.min_free_space))
         for t in self.torrent_list:
             # As long as we need to free space...
             if cleanable_space < space_to_free:
                 # and as long as the min_ratio allows...
-                if t.ratio > self.MIN_SEED_RATIO:
+                if t.ratio > self.min_seed_ratio:
                     # We collect the current torrent for further deletion
                     cleanable_space += t.total_size
                     torrents_to_clean.append(t)
@@ -256,7 +262,7 @@ class TransmissionHelper:
                 "There is not enough eligible torrents to clean (%d among %d) to reach the %s free space mark. "
                 "Consider lowering the minimum seeding ratio (now %.1f).", len(torrents_to_clean),
                 len(self.torrent_list),
-                self.__human_readable_size(self.MIN_FREE_SPACE), self.MIN_SEED_RATIO)
+                self.__human_readable_size(self.min_free_space), self.min_seed_ratio)
             if len(torrents_to_clean) == 0:
                 exit(0)
 
@@ -271,7 +277,7 @@ class TransmissionHelper:
             self.__remove_torrents(torrents_to_clean_id_list)
 
         # Check for the cleaning results
-        if self.__get_disk_free_space() >= self.MIN_FREE_SPACE:
+        if self.__get_disk_free_space() >= self.min_free_space:
             self.logger.info("There is now %s of free space, no more cleaning action needed for now.",
                              self.__get_human_disk_free_space())
         else:
@@ -279,8 +285,8 @@ class TransmissionHelper:
                              "Consider running this script with a lower minimum seeding ratio (now %.1f) and/or "
                              "a lesser minimum free disk space value, and make sure it executes (-x option).",
                              self.__get_human_disk_free_space(),
-                             self.__human_readable_size(self.MIN_FREE_SPACE),
-                             self.MIN_SEED_RATIO)
+                             self.__human_readable_size(self.min_free_space),
+                             self.min_seed_ratio)
 
     def __remove_torrents(self, torrent_list):
         self.client.remove_torrent(ids=torrent_list, delete_data=True)
@@ -385,10 +391,10 @@ def main():
         transmission_helper.config_file = args.config_file
     # Min ratio setup
     if vars(args).get('min_ratio'):
-        transmission_helper.MIN_SEED_RATIO = args.min_ratio
+        transmission_helper.min_seed_ratio = args.min_ratio
     # Min free space setup
     if vars(args).get('min_free_space'):
-        transmission_helper.MIN_FREE_SPACE = args.min_free_space
+        transmission_helper.min_free_space = args.min_free_space
 
     transmission_helper.configure()
 
