@@ -136,13 +136,12 @@ class TransmissionHelper:
         self.transmission_incomplete_dir = None
 
         # Configuration
-        self.config_file = os.path.dirname(__file__) + 'config.json'
+        self.config_file = os.path.dirname(__file__) + '/' + 'config.json'
         self.config = None
 
         # Parameters
         self.min_free_space = self.MIN_FREE_SPACE
         self.min_seed_ratio = self.MIN_SEED_RATIO
-
 
     def configure(self):
         # Load configuration file
@@ -282,11 +281,11 @@ class TransmissionHelper:
                              self.__get_human_disk_free_space())
         else:
             self.logger.warning("There is now %s of free space which is still below the minimum desired (now %s). "
-                             "Consider running this script with a lower minimum seeding ratio (now %.1f) and/or "
-                             "a lesser minimum free disk space value, and make sure it executes (-x option).",
-                             self.__get_human_disk_free_space(),
-                             self.__human_readable_size(self.min_free_space),
-                             self.min_seed_ratio)
+                                "Consider running this script with a lower minimum seeding ratio (now %.1f) and/or "
+                                "a lesser minimum free disk space value, and make sure it executes (-x option).",
+                                self.__get_human_disk_free_space(),
+                                self.__human_readable_size(self.min_free_space),
+                                self.min_seed_ratio)
 
     def __remove_torrents(self, torrent_list):
         self.client.remove_torrent(ids=torrent_list, delete_data=True)
@@ -308,7 +307,8 @@ class TransmissionHelper:
         # TODO clean that formatting mess...
         print('| {:4s} | {:80.80s} | {:19s} | {:10.10s} | {:3.0s} % | {:3.1s} | {:16s} |'.format(*matrix_data[1]))
         for row in matrix_data[0]:
-            print('| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:3.0f} % | {:>3.2f} | {:16s} |'.format(*row))
+            print(
+                '| {:4d} | {:80.80s} | {:%Y-%m-%d %H:%M:%S} | {:10.10s} | {:3.0f} % | {:>3.2f} | {:16s} |'.format(*row))
         print('%d torrents, %s on disk.' % (len(matrix_data[0]), self.__human_readable_size(matrix_data[2])))
 
     def storage_delta(self, execute):
