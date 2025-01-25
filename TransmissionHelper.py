@@ -49,7 +49,7 @@ class TransmissionHelper:
     # TODO possibly read the transmission config directly (/etc/transmission-daemon/settings.json)?
     TRANSMISSION_COMPLETE_DIR = __file__
     # Default logging location
-    LOG_FILE_PATH = '.'
+    LOG_FILE_PATH = os.path.dirname(__file__)
     # Default logging location
     LOG_FILE_NAME = 'TransmissionHelper.log'
     # TODO add config_file as default static
