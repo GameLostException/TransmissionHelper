@@ -69,7 +69,7 @@ class TransmissionHelper:
                                                 value.
                                 2. seedRatio:   restrict the removal of the torrents to those not having already seeded above
                                                 the configured "min_ratio" value.'''))
-    group.add_argument('-t', '--list_torrent',
+    group.add_argument('-l', '--list_torrent',
                        choices=['id', 'size', 'seed_ratio', 'created', 'name'],
                        type=str,
                        nargs='?',
@@ -338,31 +338,32 @@ class TransmissionHelper:
 
         dl_extra_list.sort()
         self.logger.info('Found %s files in the Transmission "complete" dir (over the %s total) that are not tracked '
-                         'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').'
-                         '\nYou may add the --execute flag to delete them.',
+                         'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').',
                          len(dl_extra_list), len(dl_dir_list), len(self.torrent_list), len(dl_dir_list),
                          self.transmission_complete_dir)
+        if len(dl_extra_list) <= 0:
+            self.logger.info('You may add the --execute flag to delete them.')
         for e in dl_extra_list:
             self.logger.debug(e)
 
         if execute:
-            self.logger.info('Deleting files...')
+            self.logger.info('Deleting %s files...', len(dl_extra_list))
             for f in dl_extra_list:
                 file_path_to_delete = self.transmission_complete_dir + '/' + f
-                self.logger.debug('Deleting %s...', file_path_to_delete)
+                self.logger.debug('Deleting %s...', file_path_to_delete, extra={"end": " "})
                 try:
                     if os.path.isfile(file_path_to_delete):
                         Path(file_path_to_delete).unlink()
                     elif os.path.isdir(file_path_to_delete):
                         shutil.rmtree(file_path_to_delete)
-                    self.logger.debug("...file deleted successfully.")
+                    self.logger.debug("done.")
                 except FileNotFoundError:
                     self.logger.error("File not found.")
                 except PermissionError:
                     self.logger.error("Permission denied. Unable to delete the file.")
                 except Exception as e:
                     self.logger.error("An error occurred:", e)
-            self.logger.info('...Done deleting files.')
+            self.logger.info('...done deleting files.')
 
             # TODO Incomplete dir
 
