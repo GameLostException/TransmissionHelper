@@ -341,7 +341,7 @@ class TransmissionHelper:
                          'by Transmission anymore (%s torrents tracked, %s items in "complete" dir \'%s\').',
                          len(dl_extra_list), len(dl_dir_list), len(self.torrent_list), len(dl_dir_list),
                          self.transmission_complete_dir)
-        if len(dl_extra_list) <= 0:
+        if len(dl_extra_list) > 0:
             self.logger.info('You may add the --execute flag to delete them.')
         for e in dl_extra_list:
             self.logger.debug(e)
